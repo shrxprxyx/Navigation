@@ -45,6 +45,7 @@ class CorridorNavigator:
         self._along_corridor_m = 0.0
         self._lateral_offset_m = 0.0
         self._avoid_direction = None  # locked +1 (right) / -1 (left) while sidestepping an obstacle
+        self._clear_streak = 0        # consecutive ticks with front distance clear of obstacle
 
     def run(self, real_time=True):
         """
@@ -73,6 +74,7 @@ class CorridorNavigator:
 
             reading = self.sensors.read(self._along_corridor_m, self._lateral_offset_m)
             left, right, front = reading["left_m"], reading["right_m"], reading["front_m"]
+            obstacle_ahead = reading.get("obstacle_ahead", front < config.OBSTACLE_SLOW_DISTANCE_M)
 
             centering_error = left - right  # +ve => closer to right wall => drift left needed... see sign note below
             # Sign convention: vy > 0 means move RIGHT (body frame).
@@ -94,14 +96,15 @@ class CorridorNavigator:
             lateral_correction = self.lateral_pid.update(centering_error)
             vy = -lateral_correction  # negate per sign convention above
 
-            vx = self._compute_forward_speed(front)
+            vx = self._compute_forward_speed(front, obstacle_ahead)
 
             # --- reactive obstacle sidestep ---
-            # If something ahead is forcing us to slow/stop, nudge laterally
-            # toward whichever side currently has more clearance, so we can
-            # go around obstacles that aren't dead-center in the corridor.
-            # This overrides pure wall-centering only while an obstacle is close.
-            if front < config.OBSTACLE_SLOW_DISTANCE_M:
+            # If a REAL obstacle (not just the corridor exit) is forcing us to
+            # slow/stop, nudge laterally toward whichever side currently has
+            # more clearance, so we can go around obstacles that aren't
+            # dead-center in the corridor.
+            if obstacle_ahead and front < config.OBSTACLE_SLOW_DISTANCE_M:
+                self._clear_streak = 0
                 # Lock the avoidance direction the FIRST time we detect an obstacle,
                 # based on which side currently has more clearance. Hold that choice
                 # until we've cleared the obstacle, so sensor noise can't cause the
@@ -127,9 +130,16 @@ class CorridorNavigator:
                 if front > config.OBSTACLE_STOP_DISTANCE_M:
                     vx = max(vx, config.FORWARD_SPEED_MIN_MPS)
             else:
-                # clear of any obstacle -- release the direction lock so the next
-                # obstacle can be evaluated fresh
-                self._avoid_direction = None
+                # Clear of any obstacle -- but only release the direction lock
+                # after several CONSECUTIVE clear readings, not just one. A
+                # single clear tick can happen from noise (or from briefly
+                # exiting the detection band mid-maneuver) and releasing too
+                # early causes rapid re-lock/re-trigger cycling (the "sawtooth"
+                # pattern) instead of a clean, committed pass around the obstacle.
+                self._clear_streak += 1
+                if self._clear_streak >= config.CLEAR_STREAK_TO_RELEASE:
+                    self._avoid_direction = None
+                    self._clear_streak = 0
 
             self.vehicle.send_velocity_body(vx=vx, vy=vy, vz=0.0, yaw_rate=0.0)
 
@@ -159,8 +169,11 @@ class CorridorNavigator:
             else:
                 virtual_time += period
 
-    def _compute_forward_speed(self, front_distance_m):
-        if front_distance_m <= config.OBSTACLE_STOP_DISTANCE_M:
+    def _compute_forward_speed(self, front_distance_m, obstacle_ahead=False):
+        # Only a REAL obstacle should bring us to a full stop. The corridor
+        # exit shrinking below the stop threshold is not a reason to halt --
+        # that would mean the drone freezes just short of the finish line.
+        if obstacle_ahead and front_distance_m <= config.OBSTACLE_STOP_DISTANCE_M:
             return 0.0
         if front_distance_m >= config.OBSTACLE_SLOW_DISTANCE_M:
             return config.FORWARD_SPEED_MAX_MPS

@@ -35,6 +35,7 @@ SENSOR_OFFSET_RIGHT_M = 0.15
 FRONT_LIDAR_MAX_RANGE_M = 8.0
 OBSTACLE_STOP_DISTANCE_M = 1.0      # stop/hold if obstacle closer than this
 OBSTACLE_SLOW_DISTANCE_M = 2.5      # start slowing down within this range
+CLEAR_STREAK_TO_RELEASE = 8         # consecutive clear ticks required before releasing avoidance lock (debounce)
 
 # ---------------- Control loop ----------------
 CONTROL_LOOP_HZ = 10.0              # how often we send velocity setpoints
