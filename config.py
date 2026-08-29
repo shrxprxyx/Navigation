@@ -14,7 +14,7 @@ Edit values in this file instead of hunting through the other scripts.
 # If you're only using Mission Planner's built-in simulator (no manual
 # sim_vehicle.py), connect directly on 14550 instead -- just make sure
 # only ONE app is the "primary" GCS to avoid mode-change conflicts.
-MAVLINK_CONNECTION_STRING = "udp:127.0.0.1:14551"
+MAVLINK_CONNECTION_STRING = "tcp:127.0.0.1:5762"
 
 # ---------------- Corridor geometry ----------------
 # From your mission doc: corridor is 3.5 m wide, 10 m long, flown at ~3 m
