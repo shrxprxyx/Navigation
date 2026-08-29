@@ -6,14 +6,13 @@ Edit values in this file instead of hunting through the other scripts.
 """
 
 # ---------------- MAVLink connection ----------------
-# Mission Planner's SITL instance already listens/broadcasts on 14550.
-# We connect a SECOND client (our "companion computer" script) on 14551,
-# which SITL also outputs to by default when using --out in sim_vehicle.py,
-# or you can add an extra output in Mission Planner:
-#   Simulation tab -> "Extra Params" -> add "--out=udp:127.0.0.1:14551"
-# If you're only using Mission Planner's built-in simulator (no manual
-# sim_vehicle.py), connect directly on 14550 instead -- just make sure
-# only ONE app is the "primary" GCS to avoid mode-change conflicts.
+# Mission Planner's SITL instance already listens/broadcasts on TCP 5760
+# (that's the port Mission Planner itself connects to -- see the top-right
+# of its window). ArduPilot SITL automatically opens TWO EXTRA TCP ports
+# for additional clients: 5762 and 5763. We connect our companion-computer
+# script to one of those, so it can run alongside Mission Planner without
+# stealing its connection or needing any extra --out param.
+# If tcp:5762 is already taken (e.g. by another script), try tcp:5763.
 MAVLINK_CONNECTION_STRING = "tcp:127.0.0.1:5762"
 
 # ---------------- Corridor geometry ----------------
