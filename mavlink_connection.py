@@ -27,7 +27,26 @@ class Vehicle:
         self.master.wait_heartbeat(timeout=timeout_s)
         print(f"[mavlink] Heartbeat received (sysid={self.master.target_system}, "
               f"compid={self.master.target_component})")
+        self._request_data_streams()
         return self.master
+
+    def _request_data_streams(self, rate_hz=10):
+        """
+        ArduPilot only pushes telemetry (position, altitude, etc.) to a GCS
+        that has explicitly asked for it -- Mission Planner does this
+        automatically on connect, but our script is a separate client and
+        needs to request it too, or things like get_relative_altitude()
+        will just hang / return None.
+        """
+        self.master.mav.request_data_stream_send(
+            self.master.target_system,
+            self.master.target_component,
+            mavutil.mavlink.MAV_DATA_STREAM_ALL,
+            rate_hz,
+            1,  # start streaming
+        )
+        # give the autopilot a moment to start pushing messages
+        time.sleep(0.5)
 
     # ---------------- arming / mode ----------------
     def set_mode(self, mode_name):
@@ -52,22 +71,41 @@ class Vehicle:
         print(f"[mavlink] WARNING: mode {mode_name} not confirmed within timeout")
         return False
 
-    def arm(self, wait_armed=True, timeout_s=15):
-        print("[mavlink] Arming...")
-        self.master.mav.command_long_send(
-            self.master.target_system, self.master.target_component,
-            mavutil.mavlink.MAV_CMD_COMPONENT_ARM_DISARM,
-            0, 1, 0, 0, 0, 0, 0, 0,
-        )
-        if wait_armed:
-            t0 = time.time()
-            while time.time() - t0 < timeout_s:
-                msg = self.master.recv_match(type="HEARTBEAT", blocking=True, timeout=2)
-                if msg and (msg.base_mode & mavutil.mavlink.MAV_MODE_FLAG_SAFETY_ARMED):
-                    print("[mavlink] Armed.")
-                    return True
-            print("[mavlink] WARNING: arm not confirmed within timeout")
-            return False
+    def arm(self, wait_armed=True, timeout_s=45, retry_interval_s=3):
+        """
+        Sends the arm command and retries periodically until armed or timeout.
+        SITL commonly refuses to arm for the first ~10-20s after starting
+        (PreArm: Need Position Estimate) while the EKF settles, even if GPS
+        already shows a fix -- so a single arm attempt often isn't enough.
+        """
+        print("[mavlink] Arming (will retry until armed or timeout)...")
+        t0 = time.time()
+        last_attempt = 0
+
+        while time.time() - t0 < timeout_s:
+            if time.time() - last_attempt >= retry_interval_s:
+                self.master.mav.command_long_send(
+                    self.master.target_system, self.master.target_component,
+                    mavutil.mavlink.MAV_CMD_COMPONENT_ARM_DISARM,
+                    0, 1, 0, 0, 0, 0, 0, 0,
+                )
+                last_attempt = time.time()
+
+            if not wait_armed:
+                return True
+
+            msg = self.master.recv_match(type="HEARTBEAT", blocking=True, timeout=1)
+            if msg and (msg.base_mode & mavutil.mavlink.MAV_MODE_FLAG_SAFETY_ARMED):
+                print("[mavlink] Armed.")
+                return True
+
+            # surface any PreArm/failure reason text so it's not a silent wait
+            status = self.master.recv_match(type="STATUSTEXT", blocking=False)
+            if status and status.text:
+                print(f"[mavlink] STATUSTEXT: {status.text}")
+
+        print(f"[mavlink] WARNING: arm not confirmed within {timeout_s}s timeout")
+        return False
 
     def disarm(self):
         self.master.mav.command_long_send(

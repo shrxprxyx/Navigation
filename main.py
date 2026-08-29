@@ -29,7 +29,13 @@ def main():
     vehicle.connect()
 
     vehicle.set_mode("GUIDED")
-    vehicle.arm()
+
+    armed = vehicle.arm()
+    if not armed:
+        print("[main] Failed to arm -- check PreArm messages above (often just "
+              "needs more time after SITL startup for EKF/GPS to settle). Aborting.")
+        sys.exit(1)
+
     vehicle.takeoff(config.SCAN_ALTITUDE_M)
 
     # --- placeholder: QR scan + banner alignment would happen here ---
