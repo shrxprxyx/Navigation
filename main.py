@@ -19,6 +19,7 @@ SITL before wiring up real TF-Luna / VL53L1X hardware.
 import sys
 import time
 import csv
+from pymavlink import mavutil
 import config
 from mavlink_connection import Vehicle
 from sensor_sim import SimulatedCorridorSensors
@@ -26,11 +27,33 @@ from corridor_navigator import CorridorNavigator, CorridorResult
 from flight_logger import FlightLogger
 
 
+def _send_clear_distance_burst(vehicle, times=5, interval=0.2):
+    """
+    Satisfies the PRX1 PreArm check ("PRX1: No Data") by sending a few
+    all-clear placeholder readings before arming. This is required now
+    that PRX1_TYPE=MAVLink -- ArduPilot won't arm without SOME proximity
+    data on record, but corridor_navigator.py doesn't send real readings
+    until navigator.run() starts, well after arming. Real readings take
+    over once the corridor phase begins; this is just to get past the
+    prearm gate with a "nothing's close" placeholder.
+    """
+    clear_cm = 800  # 8m, comfortably outside any real detection range
+    for _ in range(times):
+        vehicle.send_fake_distance_sensor(clear_cm, mavutil.mavlink.MAV_SENSOR_ROTATION_NONE, sensor_id=0)
+        vehicle.send_fake_distance_sensor(clear_cm, mavutil.mavlink.MAV_SENSOR_ROTATION_YAW_270, sensor_id=1)
+        vehicle.send_fake_distance_sensor(clear_cm, mavutil.mavlink.MAV_SENSOR_ROTATION_YAW_90, sensor_id=2)
+        time.sleep(interval)
+
+
 def main():
     vehicle = Vehicle()
     vehicle.connect()
 
     vehicle.set_mode("GUIDED")
+
+    if config.FEED_DISTANCE_SENSOR_TO_FC:
+        print("[main] Sending placeholder proximity data to clear PRX1 PreArm check...")
+        _send_clear_distance_burst(vehicle)
 
     armed = vehicle.arm()
     if not armed:

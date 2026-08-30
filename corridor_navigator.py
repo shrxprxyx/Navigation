@@ -64,6 +64,22 @@ class CorridorNavigator:
 
         print("[corridor] Starting corridor navigation...")
 
+        # Track progress from REAL telemetry, not dead-reckoning from our own
+        # commanded velocity. This matters specifically because BendyRuler is
+        # now primary: if the FC steers the real vehicle around an obstacle,
+        # that has to be reflected here, or this loop has no way of ever
+        # knowing the obstacle was cleared -- it'll sit at vx=0 forever and
+        # hit the timeout below every single time.
+        start_pos = self.vehicle.get_local_position()
+        for _ in range(10):
+            if start_pos is not None:
+                break
+            time.sleep(0.2)
+            start_pos = self.vehicle.get_local_position()
+        if start_pos is None:
+            print("[corridor] WARNING: couldn't read starting position, falling back to dead-reckoning.")
+        start_x, start_y = (start_pos[0], start_pos[1]) if start_pos else (0.0, 0.0)
+
         while True:
             loop_start = time.time()
             elapsed_time = (time.time() - start_time) if real_time else virtual_time
@@ -72,6 +88,17 @@ class CorridorNavigator:
                 print("[corridor] TIMEOUT -- aborting, holding position.")
                 self.vehicle.hold_position()
                 return CorridorResult.TIMEOUT
+
+            # Pull real position every tick. NED local frame: x = forward
+            # (assumes corridor runs along the takeoff heading -- fine for a
+            # straight corridor aligned with SITL's default heading; revisit
+            # with a yaw-rotation if the corridor isn't oriented that way).
+            # Falls back to the last dead-reckoned estimate on a dropped read
+            # so a single missed telemetry packet doesn't stall the loop.
+            pos = self.vehicle.get_local_position()
+            if pos is not None:
+                self._along_corridor_m = pos[0] - start_x
+                self._lateral_offset_m = pos[1] - start_y
 
             reading = self.sensors.read(self._along_corridor_m, self._lateral_offset_m)
             left, right, front = reading["left_m"], reading["right_m"], reading["front_m"]
@@ -163,9 +190,13 @@ class CorridorNavigator:
 
             self.vehicle.send_velocity_body(vx=vx, vy=vy, vz=0.0, yaw_rate=0.0)
 
-            # Dead-reckon our progress (replace with real odometry on hardware)
-            self._along_corridor_m += vx * period
-            self._lateral_offset_m += vy * period
+            # Fallback only: if this tick's telemetry read failed (pos is None,
+            # checked above), keep the loop moving using the old dead-reckoning
+            # method rather than freezing at a stale position. When telemetry
+            # is healthy, next tick's real position read overwrites this anyway.
+            if pos is None:
+                self._along_corridor_m += vx * period
+                self._lateral_offset_m += vy * period
 
             if self.logger:
                 self.logger.log(
