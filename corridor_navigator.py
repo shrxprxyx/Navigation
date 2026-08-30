@@ -16,6 +16,7 @@ later).
 """
 
 import time
+import math
 from pymavlink import mavutil
 import config
 from pid_controller import PID
@@ -80,6 +81,21 @@ class CorridorNavigator:
             print("[corridor] WARNING: couldn't read starting position, falling back to dead-reckoning.")
         start_x, start_y = (start_pos[0], start_pos[1]) if start_pos else (0.0, 0.0)
 
+        # Lock yaw to whatever heading the corridor is actually aligned to at
+        # the start of this run -- NOT hardcoded to 0. YAW_LOCKED was already
+        # declared in config.py but never enforced anywhere: sending
+        # yaw_rate=0.0 every tick (the old behavior) only means "don't
+        # actively turn", it does NOT resist rotation from other causes.
+        # BendyRuler's own avoidance maneuvers can and do reorient the
+        # vehicle -- once that happens, body-frame vy stops matching the
+        # corridor's real-world left/right, and every subsequent correction
+        # pushes the wrong way (this is what caused the sustained
+        # wrong-direction drift into the wall).
+        target_yaw = self.vehicle.get_yaw()
+        if target_yaw is None:
+            target_yaw = 0.0
+            print("[corridor] WARNING: couldn't read starting yaw, assuming 0 (North).")
+
         while True:
             loop_start = time.time()
             elapsed_time = (time.time() - start_time) if real_time else virtual_time
@@ -104,16 +120,22 @@ class CorridorNavigator:
             left, right, front = reading["left_m"], reading["right_m"], reading["front_m"]
             obstacle_ahead = reading.get("obstacle_ahead", front < config.OBSTACLE_SLOW_DISTANCE_M)
 
-            # PRIMARY avoidance input: feed the flight controller's own BendyRuler
-            # the same readings our Python logic sees, every tick. This is what
-            # was missing before -- the FC had nothing to react to.
+            # PRIMARY avoidance input for BendyRuler: FRONT sensor only.
+            #
+            # Deliberately NOT sending left/right here. BendyRuler is built to
+            # dodge discrete obstacles in open space -- it was never meant to
+            # fly through an enclosed corridor where both walls constantly
+            # report something nearby (that's just... the corridor). Feeding
+            # it continuous close-range left+right readings makes it think
+            # it's boxed in and start making its own independent steering
+            # decisions, fighting our lateral_pid below for lateral control --
+            # that's what caused the hook-shaped flight path / early unsafe
+            # abort. Front-only obstacles (the actual SIM_OBSTACLES) are
+            # exactly what BendyRuler should be reacting to; wall-centering
+            # stays entirely our own PID's job.
             if config.FEED_DISTANCE_SENSOR_TO_FC:
                 self.vehicle.send_fake_distance_sensor(
                     front * 100, mavutil.mavlink.MAV_SENSOR_ROTATION_NONE, sensor_id=0)
-                self.vehicle.send_fake_distance_sensor(
-                    left * 100, mavutil.mavlink.MAV_SENSOR_ROTATION_YAW_270, sensor_id=1)
-                self.vehicle.send_fake_distance_sensor(
-                    right * 100, mavutil.mavlink.MAV_SENSOR_ROTATION_YAW_90, sensor_id=2)
 
             centering_error = left - right  # +ve => closer to right wall => drift left needed... see sign note below
             # Sign convention: vy > 0 means move RIGHT (body frame).
@@ -136,6 +158,19 @@ class CorridorNavigator:
             vy = -lateral_correction  # negate per sign convention above
 
             vx = self._compute_forward_speed(front, obstacle_ahead)
+
+            # Actively correct back toward the corridor's original heading,
+            # instead of the old yaw_rate=0.0 which did nothing to resist
+            # rotation. Simple P-controller on yaw error.
+            yaw_rt = 0.0
+            if config.YAW_LOCKED:
+                current_yaw = self.vehicle.get_yaw()
+                if current_yaw is not None:
+                    yaw_error = target_yaw - current_yaw
+                    # normalize to [-pi, pi] so we always turn the short way
+                    yaw_error = (yaw_error + math.pi) % (2 * math.pi) - math.pi
+                    yaw_rt = max(-config.YAW_LOCK_MAX_RATE_RAD_S,
+                                 min(config.YAW_LOCK_MAX_RATE_RAD_S, config.YAW_LOCK_KP * yaw_error))
 
             # --- reactive obstacle sidestep (BACKUP steering, off by default) ---
             # If a REAL obstacle (not just the corridor exit) is forcing us to
@@ -188,7 +223,7 @@ class CorridorNavigator:
                     self._avoid_direction = None
                     self._clear_streak = 0
 
-            self.vehicle.send_velocity_body(vx=vx, vy=vy, vz=0.0, yaw_rate=0.0)
+            self.vehicle.send_velocity_body(vx=vx, vy=vy, vz=0.0, yaw_rate=yaw_rt)
 
             # Fallback only: if this tick's telemetry read failed (pos is None,
             # checked above), keep the loop moving using the old dead-reckoning

@@ -61,6 +61,8 @@ LATERAL_KI = 0.02
 LATERAL_KD = 0.15
 LATERAL_MAX_MPS = 0.3               # clamp lateral correction speed
 YAW_LOCKED = True                   # keep yaw fixed, only move fwd/lateral
+YAW_LOCK_KP = 2.0                   # P-gain: yaw error (rad) -> yaw_rate command (rad/s)
+YAW_LOCK_MAX_RATE_RAD_S = 0.5       # clamp on the corrective yaw rate
 
 # ---------------- Safety ----------------
 MIN_WALL_CLEARANCE_M = 0.25         # abort if drone gets closer than this to either wall

@@ -19,6 +19,7 @@ SITL before wiring up real TF-Luna / VL53L1X hardware.
 import sys
 import time
 import csv
+import threading
 from pymavlink import mavutil
 import config
 from mavlink_connection import Vehicle
@@ -28,21 +29,29 @@ from flight_logger import FlightLogger
 
 
 def _send_clear_distance_burst(vehicle, times=5, interval=0.2):
-    """
-    Satisfies the PRX1 PreArm check ("PRX1: No Data") by sending a few
-    all-clear placeholder readings before arming. This is required now
-    that PRX1_TYPE=MAVLink -- ArduPilot won't arm without SOME proximity
-    data on record, but corridor_navigator.py doesn't send real readings
-    until navigator.run() starts, well after arming. Real readings take
-    over once the corridor phase begins; this is just to get past the
-    prearm gate with a "nothing's close" placeholder.
-    """
-    clear_cm = 800  # 8m, comfortably outside any real detection range
+    """One-off burst, used just before arming to clear the initial PreArm check.
+    Front sensor only -- see corridor_navigator.py for why left/right are
+    deliberately excluded from the BendyRuler feed."""
+    clear_cm = 800
     for _ in range(times):
         vehicle.send_fake_distance_sensor(clear_cm, mavutil.mavlink.MAV_SENSOR_ROTATION_NONE, sensor_id=0)
-        vehicle.send_fake_distance_sensor(clear_cm, mavutil.mavlink.MAV_SENSOR_ROTATION_YAW_270, sensor_id=1)
-        vehicle.send_fake_distance_sensor(clear_cm, mavutil.mavlink.MAV_SENSOR_ROTATION_YAW_90, sensor_id=2)
         time.sleep(interval)
+
+
+def _keep_proximity_alive(vehicle, stop_event, interval=0.5):
+    """
+    Runs in a background thread from right after arming until the corridor
+    phase starts sending real readings. Without this, the one-off burst
+    above goes stale during takeoff/climb (which can easily take several
+    seconds) and ArduPilot flags it as "Bad Proximity" mid-flight -- not
+    a prearm block this time, but still means BendyRuler has nothing
+    trustworthy to react to during that window. Front sensor only, same
+    reasoning as corridor_navigator.py.
+    """
+    clear_cm = 800
+    while not stop_event.is_set():
+        vehicle.send_fake_distance_sensor(clear_cm, mavutil.mavlink.MAV_SENSOR_ROTATION_NONE, sensor_id=0)
+        stop_event.wait(interval)
 
 
 def main():
@@ -62,6 +71,18 @@ def main():
         sys.exit(1)
 
     vehicle.takeoff(config.SCAN_ALTITUDE_M)
+
+    # Keep proximity data "fresh" in the FC's eyes throughout takeoff, QR
+    # scan placeholder, and descent -- all of which happen before
+    # corridor_navigator.py starts sending real readings. Stopped right
+    # before navigator.run() so real data takes over cleanly, no two
+    # sources writing at once.
+    keepalive_stop = threading.Event()
+    keepalive_thread = None
+    if config.FEED_DISTANCE_SENSOR_TO_FC:
+        keepalive_thread = threading.Thread(
+            target=_keep_proximity_alive, args=(vehicle, keepalive_stop), daemon=True)
+        keepalive_thread.start()
 
     # --- placeholder: QR scan + banner alignment would happen here ---
     print("[main] (QR scan / banner alignment step goes here)")
@@ -83,6 +104,10 @@ def main():
 
     vehicle.hold_position()
     time.sleep(1)
+
+    if keepalive_thread is not None:
+        keepalive_stop.set()
+        keepalive_thread.join(timeout=1)
 
     sensors = SimulatedCorridorSensors()
     logger = FlightLogger("corridor_run_log.csv")

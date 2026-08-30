@@ -150,6 +150,13 @@ class Vehicle:
             return None
         return (msg.x, msg.y, msg.z)
 
+    def get_yaw(self):
+        """Returns current yaw in radians (NED, 0 = North), or None."""
+        msg = self.master.recv_match(type="ATTITUDE", blocking=True, timeout=2)
+        if msg is None:
+            return None
+        return msg.yaw
+
     # ---------------- guided velocity control ----------------
     def send_velocity_body(self, vx, vy, vz, yaw_rate=0.0):
         """
