@@ -16,6 +16,7 @@ later).
 """
 
 import time
+from pymavlink import mavutil
 import config
 from pid_controller import PID
 
@@ -76,6 +77,17 @@ class CorridorNavigator:
             left, right, front = reading["left_m"], reading["right_m"], reading["front_m"]
             obstacle_ahead = reading.get("obstacle_ahead", front < config.OBSTACLE_SLOW_DISTANCE_M)
 
+            # PRIMARY avoidance input: feed the flight controller's own BendyRuler
+            # the same readings our Python logic sees, every tick. This is what
+            # was missing before -- the FC had nothing to react to.
+            if config.FEED_DISTANCE_SENSOR_TO_FC:
+                self.vehicle.send_fake_distance_sensor(
+                    front * 100, mavutil.mavlink.MAV_SENSOR_ROTATION_NONE, sensor_id=0)
+                self.vehicle.send_fake_distance_sensor(
+                    left * 100, mavutil.mavlink.MAV_SENSOR_ROTATION_YAW_270, sensor_id=1)
+                self.vehicle.send_fake_distance_sensor(
+                    right * 100, mavutil.mavlink.MAV_SENSOR_ROTATION_YAW_90, sensor_id=2)
+
             centering_error = left - right  # +ve => closer to right wall => drift left needed... see sign note below
             # Sign convention: vy > 0 means move RIGHT (body frame).
             # If left > right, drone is closer to the right wall, so it should
@@ -98,12 +110,20 @@ class CorridorNavigator:
 
             vx = self._compute_forward_speed(front, obstacle_ahead)
 
-            # --- reactive obstacle sidestep ---
+            # --- reactive obstacle sidestep (BACKUP steering, off by default) ---
             # If a REAL obstacle (not just the corridor exit) is forcing us to
             # slow/stop, nudge laterally toward whichever side currently has
             # more clearance, so we can go around obstacles that aren't
             # dead-center in the corridor.
-            if obstacle_ahead and front < config.OBSTACLE_SLOW_DISTANCE_M:
+            #
+            # Gated behind CUSTOM_SIDESTEP_STEERING_ENABLED: with BendyRuler
+            # now primary (see FEED_DISTANCE_SENSOR_TO_FC above), letting this
+            # ALSO actively steer means two independent systems could each
+            # choose a different dodge direction and fight each other. Flip
+            # this back on only if you disable FEED_DISTANCE_SENSOR_TO_FC and
+            # want pure Python-side avoidance again (e.g. testing without
+            # relying on ArduPilot's OA_TYPE params at all).
+            if config.CUSTOM_SIDESTEP_STEERING_ENABLED and obstacle_ahead and front < config.OBSTACLE_SLOW_DISTANCE_M:
                 self._clear_streak = 0
                 # Lock the avoidance direction the FIRST time we detect an obstacle,
                 # based on which side currently has more clearance. Hold that choice

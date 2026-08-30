@@ -36,6 +36,22 @@ OBSTACLE_STOP_DISTANCE_M = 1.0      # stop/hold if obstacle closer than this
 OBSTACLE_SLOW_DISTANCE_M = 2.5      # start slowing down within this range
 CLEAR_STREAK_TO_RELEASE = 8         # consecutive clear ticks required before releasing avoidance lock (debounce)
 
+# ---------------- Avoidance architecture ----------------
+# PRIMARY: feed live DISTANCE_SENSOR data to the flight controller every
+# tick, so ArduPilot's BendyRuler (if enabled via OA_TYPE in Mission
+# Planner's param list) does the actual lateral steering around obstacles.
+FEED_DISTANCE_SENSOR_TO_FC = True
+
+# BACKUP: the companion-computer-side sidestep steering in
+# corridor_navigator.py (the avoid_direction lock/blend logic). Left OFF
+# by default now that BendyRuler is primary -- running both at once means
+# two independent systems can each pick a different dodge direction and
+# fight each other. Speed ramp-down and the min-wall-clearance hard abort
+# stay ACTIVE regardless of this flag -- those don't steer, so they can't
+# conflict with BendyRuler, and they're exactly the kind of safety net
+# you want even when the FC is doing the steering.
+CUSTOM_SIDESTEP_STEERING_ENABLED = False
+
 # ---------------- Control loop ----------------
 CONTROL_LOOP_HZ = 10.0              # how often we send velocity setpoints
 FORWARD_SPEED_MAX_MPS = 0.5         # cruise speed inside corridor (slow!)
