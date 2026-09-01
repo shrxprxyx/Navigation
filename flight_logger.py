@@ -15,14 +15,18 @@ class FlightLogger:
         self._file = open(self.filepath, "w", newline="")
         self._writer = csv.writer(self._file)
         self._writer.writerow(
-            ["t", "along_m", "lateral_m", "left_m", "right_m", "front_m", "vx", "vy"]
+        ["t", "along_m", "lateral_m", "left_m", "right_m", "front_m",
+         "vx", "vy", "yaw_rad", "yaw_error_rad"]
         )
 
-    def log(self, t, along, lateral, left, right, front, vx, vy):
+    def log(self, t, along, lateral, left, right, front, vx, vy,
+         yaw=None, yaw_error=None):
         self._writer.writerow(
             [f"{t:.3f}", f"{along:.3f}", f"{lateral:.3f}",
-             f"{left:.3f}", f"{right:.3f}", f"{front:.3f}",
-             f"{vx:.3f}", f"{vy:.3f}"]
+            f"{left:.3f}", f"{right:.3f}", f"{front:.3f}",
+            f"{vx:.3f}", f"{vy:.3f}",
+            f"{yaw:.3f}" if yaw is not None else "",
+            f"{yaw_error:.3f}" if yaw_error is not None else ""]
         )
 
     def close(self):

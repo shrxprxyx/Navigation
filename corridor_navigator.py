@@ -240,6 +240,7 @@ class CorridorNavigator:
                     lateral=self._lateral_offset_m,
                     left=left, right=right, front=front,
                     vx=vx, vy=vy,
+                    yaw=current_yaw, yaw_error=yaw_error,
                 )
 
             if self._along_corridor_m >= config.CORRIDOR_LENGTH_M:

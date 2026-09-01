@@ -157,25 +157,39 @@ class Vehicle:
             return None
         return msg.yaw
 
-    # ---------------- guided velocity control ----------------
+    # ---------------- guided velocity control ---------------
     def send_velocity_body(self, vx, vy, vz, yaw_rate=0.0):
         """
         Send velocity setpoint in BODY frame (forward, right, down), m/s.
-        This is what the corridor navigator calls every control-loop tick.
+        ...
         """
         type_mask = (
-            0b0000_0111_1100_0111  # ignore position & accel, use velocity + yaw_rate
+            0b0000_0111_1100_0111
         )
         self.master.mav.set_position_target_local_ned_send(
-            0,  # time_boot_ms (ignored)
+            0,
             self.master.target_system,
             self.master.target_component,
             mavutil.mavlink.MAV_FRAME_BODY_OFFSET_NED,
             type_mask,
-            0, 0, 0,        # x, y, z position (ignored)
-            vx, vy, vz,     # velocity
-            0, 0, 0,        # accel (ignored)
-            0, yaw_rate,    # yaw, yaw_rate
+            0, 0, 0,
+            vx, vy, vz,
+            0, 0, 0,
+            0, yaw_rate,
+        )
+
+    def send_velocity_local(self, vx_north, vy_east, vz, yaw_rate=0.0):
+        """Velocity setpoint in a FIXED local frame (North, East, Down), m/s.
+        Use this instead of send_velocity_body() whenever you're computing
+        vx/vy relative to a fixed corridor axis rather than the vehicle's
+        instantaneous heading -- it decouples translational control from
+        whatever the FC's actual current yaw is at that instant (e.g. mid-
+        BendyRuler-maneuver), which body-frame commands don't."""
+        type_mask = 0b0000_0111_1100_0111
+        self.master.mav.set_position_target_local_ned_send(
+            0, self.master.target_system, self.master.target_component,
+            mavutil.mavlink.MAV_FRAME_LOCAL_NED, type_mask,
+            0, 0, 0, vx_north, vy_east, vz, 0, 0, 0, 0, yaw_rate,
         )
 
     def hold_position(self):
