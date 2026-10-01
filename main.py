@@ -23,7 +23,7 @@ import threading
 from pymavlink import mavutil
 import config
 from mavlink_connection import Vehicle
-from sensor_sim import SimulatedCorridorSensors
+from logged_sensor import LoggedFrontLRSensor
 from corridor_navigator import CorridorNavigator, CorridorResult
 from flight_logger import FlightLogger
 
@@ -109,7 +109,7 @@ def main():
         keepalive_stop.set()
         keepalive_thread.join(timeout=1)
 
-    sensors = SimulatedCorridorSensors()
+    sensors = LoggedFrontLRSensor()
     logger = FlightLogger("corridor_run_log.csv")
     navigator = CorridorNavigator(vehicle, sensors, logger=logger)
 
