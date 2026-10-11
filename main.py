@@ -23,7 +23,6 @@ import threading
 from pymavlink import mavutil
 import config
 from mavlink_connection import Vehicle
-from logged_sensor import LoggedFrontLRSensor
 from corridor_navigator import CorridorNavigator, CorridorResult
 from flight_logger import FlightLogger
 
@@ -52,6 +51,19 @@ def _keep_proximity_alive(vehicle, stop_event, interval=0.5):
     while not stop_event.is_set():
         vehicle.send_fake_distance_sensor(clear_cm, mavutil.mavlink.MAV_SENSOR_ROTATION_NONE, sensor_id=0)
         stop_event.wait(interval)
+
+
+def build_sensors(vehicle):
+    """Pick the sensor source from config.SENSOR_SOURCE ("sim" | "logged" | "real")."""
+    src = config.SENSOR_SOURCE
+    if src == "real":
+        from real_sensors import RealCorridorSensors
+        return RealCorridorSensors(vehicle)
+    if src == "sim":
+        from sensor_sim import SimulatedCorridorSensors
+        return SimulatedCorridorSensors()
+    from logged_sensor import LoggedFrontLRSensor
+    return LoggedFrontLRSensor()
 
 
 def main():
@@ -109,7 +121,7 @@ def main():
         keepalive_stop.set()
         keepalive_thread.join(timeout=1)
 
-    sensors = LoggedFrontLRSensor()
+    sensors = build_sensors(vehicle)
     logger = FlightLogger("corridor_run_log.csv")
     navigator = CorridorNavigator(vehicle, sensors, logger=logger)
 

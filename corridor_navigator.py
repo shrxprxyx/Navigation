@@ -163,6 +163,8 @@ class CorridorNavigator:
             # instead of the old yaw_rate=0.0 which did nothing to resist
             # rotation. Simple P-controller on yaw error.
             yaw_rt = 0.0
+            current_yaw = None
+            yaw_error = None
             if config.YAW_LOCKED:
                 current_yaw = self.vehicle.get_yaw()
                 if current_yaw is not None:

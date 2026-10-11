@@ -6,7 +6,6 @@ Provides left and right distance sensor readings from logged TOF sensor data
 using the same geometry as sensor_sim.SimulatedCorridorSensors.
 """
 
-import docx
 import re
 import time
 import random
@@ -19,6 +18,7 @@ LOG_R_PATH = r"C:\Users\Shripriya Sriram\Downloads\R_sensor dataset.docx"
 
 def _extract_distances(docx_path: str) -> list[float]:
     """Extract measured distances (in mm) from a .docx file."""
+    import docx
     doc = docx.Document(docx_path)
     distances = []
     for para in doc.paragraphs:
