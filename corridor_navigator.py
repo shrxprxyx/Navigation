@@ -141,8 +141,13 @@ class CorridorNavigator:
             # exactly what BendyRuler should be reacting to; wall-centering
             # stays entirely our own PID's job.
             if config.FEED_DISTANCE_SENSOR_TO_FC:
+                # The FC treats this as a beam straight ahead of the drone, so ONLY report real
+                # obstacles. When nothing is in the way (the sim's "front" is then just the distance
+                # to the corridor exit or to an obstacle off to the side) send max range (800 cm =
+                # nothing), otherwise BendyRuler sees a phantom wall ahead and keeps veering away.
+                dist_cm = front * 100 if obstacle_ahead else 800
                 self.vehicle.send_fake_distance_sensor(
-                    front * 100, mavutil.mavlink.MAV_SENSOR_ROTATION_NONE, sensor_id=0)
+                    dist_cm, mavutil.mavlink.MAV_SENSOR_ROTATION_NONE, sensor_id=0)
 
             centering_error = left - right  # +ve => closer to right wall => drift left needed... see sign note below
             # Sign convention: vy > 0 means move RIGHT (body frame).

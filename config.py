@@ -64,7 +64,7 @@ CORRIDOR_TIMEOUT_S = 90             # abort if mission takes longer
 SIM_OBSTACLES = [
     # (distance_along_corridor_m, lateral_offset_from_center_m, radius_m)
     (4.0, 0.5, 0.3),
-    (7.0, -0.6, 0.3),
+    (7.0, -0.6, 0.3)
 ]
 SIM_WALL_NOISE_STD_M = 0.03   # Use real sensor noise levels instead:
 # SIM_WALL_NOISE_STD_M = (FRONT_SENSOR_NOISE_STD_MM / 1000.0)  # ~0.002 m
