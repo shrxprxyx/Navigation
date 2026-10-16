@@ -23,12 +23,12 @@ SENSOR_OFFSET_RIGHT_M = 0.15
 # ---- Sensor calibration corrections (from real hardware test) ----
 # Both sensors calibrated at ~300 mm ground truth, Sept 2026.
 # These are POSITIVE offsets (add to raw reading to correct toward ground truth).
-FRONT_SENSOR_BIAS_MM = 17.4   # TFmini: reads 282.7, true=300; bias=+17.4
-FRONT_SENSOR_NOISE_STD_MM = 2.29
-LEFT_SENSOR_BIAS_MM = 7.2     # VL53L1X: reads 292.8, true=300; bias=+7.2
+FRONT_SENSOR_BIAS_MM = 12.9        # TFmini, 1 cm resolution so this is rough
+FRONT_SENSOR_NOISE_STD_MM = 4.56
+LEFT_SENSOR_BIAS_MM = 7.2          # VL53L1X left
 LEFT_SENSOR_NOISE_STD_MM = 1.97
-RIGHT_SENSOR_BIAS_MM = 7.2    # Assume same as left until proven otherwise
-RIGHT_SENSOR_NOISE_STD_MM = 1.97
+RIGHT_SENSOR_BIAS_MM = 17.3        # VL53L1X right (reads lower than left)
+RIGHT_SENSOR_NOISE_STD_MM = 2.34
 
 # ---- Front LiDAR (TF-Luna) ----
 FRONT_LIDAR_MAX_RANGE_M = 8.0
