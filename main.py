@@ -23,7 +23,6 @@ import threading
 from pymavlink import mavutil
 import config
 from mavlink_connection import Vehicle
-from sensor_sim import SimulatedCorridorSensors
 from corridor_navigator import CorridorNavigator, CorridorResult
 from flight_logger import FlightLogger
 
@@ -54,6 +53,22 @@ def _keep_proximity_alive(vehicle, stop_event, interval=0.5):
         stop_event.wait(interval)
 
 
+def build_sensors(vehicle):
+    """Pick the sensor source from config.SENSOR_SOURCE ("sim" | "logged" | "replay" | "real")."""
+    src = config.SENSOR_SOURCE
+    if src == "real":
+        from real_sensors import RealCorridorSensors
+        return RealCorridorSensors(vehicle)
+    if src == "replay":
+        from replay_sensors import ReplaySensors
+        return ReplaySensors()
+    if src == "sim":
+        from sensor_sim import SimulatedCorridorSensors
+        return SimulatedCorridorSensors()
+    from logged_sensor import LoggedFrontLRSensor
+    return LoggedFrontLRSensor()
+
+
 def main():
     vehicle = Vehicle()
     vehicle.connect()
@@ -70,8 +85,6 @@ def main():
               "needs more time after SITL startup for EKF/GPS to settle). Aborting.")
         sys.exit(1)
 
-    vehicle.takeoff(config.SCAN_ALTITUDE_M)
-
     # Keep proximity data "fresh" in the FC's eyes throughout takeoff, QR
     # scan placeholder, and descent -- all of which happen before
     # corridor_navigator.py starts sending real readings. Stopped right
@@ -83,6 +96,9 @@ def main():
         keepalive_thread = threading.Thread(
             target=_keep_proximity_alive, args=(vehicle, keepalive_stop), daemon=True)
         keepalive_thread.start()
+
+    # Takeoff blocks until altitude is reached, so the keepalive above must already be running.
+    vehicle.takeoff(config.SCAN_ALTITUDE_M)
 
     # --- placeholder: QR scan + banner alignment would happen here ---
     print("[main] (QR scan / banner alignment step goes here)")
@@ -109,7 +125,7 @@ def main():
         keepalive_stop.set()
         keepalive_thread.join(timeout=1)
 
-    sensors = SimulatedCorridorSensors()
+    sensors = build_sensors(vehicle)
     logger = FlightLogger("corridor_run_log.csv")
     navigator = CorridorNavigator(vehicle, sensors, logger=logger)
 

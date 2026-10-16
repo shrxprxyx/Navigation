@@ -69,6 +69,26 @@ SIM_OBSTACLES = [
 SIM_WALL_NOISE_STD_M = 0.03   # Use real sensor noise levels instead:
 # SIM_WALL_NOISE_STD_M = (FRONT_SENSOR_NOISE_STD_MM / 1000.0)  # ~0.002 m
 
+# ---- Sensor source & Pi hardware ----
+SENSOR_SOURCE = "replay"            # "sim" | "logged" | "replay" | "real"  ("replay" = SITL test, "real" = drone)
+TOF_I2C_BUS = 1
+TOF_LEFT_XSHUT_GPIO = 17            # BCM pin wired to left VL53L1X XSHUT  <-- set to your wiring
+TOF_RIGHT_XSHUT_GPIO = 27           # BCM pin wired to right VL53L1X XSHUT <-- set to your wiring
+TOF_LEFT_ADDR = 0x30
+TOF_RIGHT_ADDR = 0x31
+FRONT_LIDAR_ORIENTATION = 0         # MAV_SENSOR_ROTATION_NONE = forward (matches RNGFND1_ORIENT)
+if SENSOR_SOURCE == "real":
+    # The FC reads the real lidar itself; injecting fake DISTANCE_SENSOR would conflict with it.
+    FEED_DISTANCE_SENSOR_TO_FC = False
+
+# ---- Position-target navigation (lets ArduPilot's BendyRuler steer around obstacles) ----
+USE_POSITION_TARGET_NAV = True    # True = send corridor-end destination instead of velocities
+POSITION_TARGET_PERIOD_S = 0.5      # how often the destination is re-sent
+POSITION_TARGET_EXIT_MARGIN_M = 1.0 # aim this far past the corridor end so the drone doesn't stop early
+# When True also: CUSTOM_SIDESTEP_STEERING_ENABLED = False, FEED_DISTANCE_SENSOR_TO_FC = True
+# FC params: OA_TYPE=1, OA_BR_TYPE=1, OA_BR_LOOKAHEAD=4, OA_MARGIN_MAX=0.6, WPNAV_SPEED=50,
+#            AVOID_ENABLE=0, PRX1_TYPE=2
+
 # ---- Altitude control (for descent phase before corridor entry) ----
 DESCENT_RATE_MPS = 0.5              # how fast to descend from scan altitude
 # """

@@ -135,29 +135,26 @@ class Vehicle:
         return False
 
     # ============= Telemetry (with message caching) =============
-    def _get_cached_message(self, msg_type, max_age_s=0.2):
-        """
-        Retrieve a cached message if it's recent, otherwise fetch a new one.
-        Reduces redundant blocking recv_match calls.
-        """
-        cache_key = msg_type
+    def _pump(self):
+        """Drain EVERY queued MAVLink message and keep the newest of each type.
+        (The old version read one matching message per call, at most every 0.2 s, so at a
+        10 Hz telemetry rate the queue backed up and position/yaw lagged further and
+        further behind the real vehicle.)"""
         now = time.time()
-        
-        # Return cached message if it's fresh
-        if cache_key in self._telemetry_cache:
-            age = now - self._cache_timestamps.get(cache_key, 0)
-            if age < max_age_s:
-                return self._telemetry_cache[cache_key]
-        
-        # Fetch new message (non-blocking to avoid stalling)
-        msg = self.master.recv_match(type=msg_type, blocking=False)
-        if msg is not None:
-            self._telemetry_cache[cache_key] = msg
-            self._cache_timestamps[cache_key] = now
-            return msg
-        
-        # Return stale cache if nothing new arrived
-        return self._telemetry_cache.get(cache_key, None)
+        while True:
+            msg = self.master.recv_match(blocking=False)
+            if msg is None:
+                break
+            t = msg.get_type()
+            if t == "BAD_DATA":
+                continue
+            self._telemetry_cache[t] = msg
+            self._cache_timestamps[t] = now
+
+    def _get_cached_message(self, msg_type, max_age_s=0.2):
+        """Newest message of this type (or None). max_age_s kept for compatibility."""
+        self._pump()
+        return self._telemetry_cache.get(msg_type)
 
     def get_relative_altitude(self, apply_sensor_bias=False):
         """Returns altitude in meters, or None."""
@@ -205,6 +202,18 @@ class Vehicle:
             0, 0, 0, vx_north, vy_east, vz, 0, 0, 0, 0, yaw_rate,
         )
 
+    def send_position_target_local(self, x, y, z, yaw=None):
+        """Position setpoint in LOCAL_NED (m, z negative = up), optional yaw (rad).
+        Unlike velocity setpoints, ArduPilot's object avoidance (BendyRuler, OA_TYPE) acts
+        on position/waypoint targets in Guided mode, so this is what lets it steer around
+        obstacles. Speed to the target is set by the WPNAV_SPEED param (cm/s)."""
+        type_mask = 0x09F8 if yaw is not None else 0x0DF8   # position (+yaw) only
+        self.master.mav.set_position_target_local_ned_send(
+            0, self.master.target_system, self.master.target_component,
+            mavutil.mavlink.MAV_FRAME_LOCAL_NED, type_mask,
+            x, y, z, 0, 0, 0, 0, 0, 0, yaw if yaw is not None else 0.0, 0.0,
+        )
+
     def hold_position(self):
         self.send_velocity_body(0, 0, 0, 0)
 
@@ -225,6 +234,25 @@ class Vehicle:
             0,                      # covariance
         )
 
+
+    # ============= Real DISTANCE_SENSOR (lidar wired to the FC) =============
+    def request_message_interval(self, msg_id, hz):
+        """Ask the FC to stream a MAVLink message at `hz` (e.g. DISTANCE_SENSOR = 132)."""
+        self.master.mav.command_long_send(
+            self.master.target_system, self.master.target_component,
+            mavutil.mavlink.MAV_CMD_SET_MESSAGE_INTERVAL, 0,
+            msg_id, int(1e6 / hz), 0, 0, 0, 0, 0)
+
+    def get_distance_sensor_mm(self, orientation=0, max_age_s=0.5):
+        """Newest DISTANCE_SENSOR from the FC in mm, or None if never seen / stale / wrong
+        orientation. Goes through the same message cache as the other telemetry reads, so
+        it doesn't fight them for the connection."""
+        msg = self._get_cached_message("DISTANCE_SENSOR", max_age_s=0.05)
+        if msg is None or msg.orientation != orientation:
+            return None
+        if time.time() - self._cache_timestamps.get("DISTANCE_SENSOR", 0) > max_age_s:
+            return None
+        return msg.current_distance * 10   # cm -> mm
 
 class FakeVehicle:
     """

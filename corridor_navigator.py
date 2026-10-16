@@ -48,6 +48,7 @@ class CorridorNavigator:
         self._lateral_offset_m = 0.0
         self._avoid_direction = None  # locked +1 (right) / -1 (left) while sidestepping an obstacle
         self._clear_streak = 0        # consecutive ticks with front distance clear of obstacle
+        self._last_target_t = 0.0     # last time a position target was sent (position-target mode)
 
     def run(self, real_time=True):
         """
@@ -113,8 +114,14 @@ class CorridorNavigator:
             # so a single missed telemetry packet doesn't stall the loop.
             pos = self.vehicle.get_local_position()
             if pos is not None:
-                self._along_corridor_m = pos[0] - start_x
-                self._lateral_offset_m = pos[1] - start_y
+                if config.USE_POSITION_TARGET_NAV:
+                    # project onto the corridor axes (along = target_yaw direction, lateral = its right)
+                    dx, dy = pos[0] - start_x, pos[1] - start_y
+                    self._along_corridor_m = dx * math.cos(target_yaw) + dy * math.sin(target_yaw)
+                    self._lateral_offset_m = -dx * math.sin(target_yaw) + dy * math.cos(target_yaw)
+                else:
+                    self._along_corridor_m = pos[0] - start_x
+                    self._lateral_offset_m = pos[1] - start_y
 
             reading = self.sensors.read(self._along_corridor_m, self._lateral_offset_m)
             left, right, front = reading["left_m"], reading["right_m"], reading["front_m"]
@@ -163,6 +170,8 @@ class CorridorNavigator:
             # instead of the old yaw_rate=0.0 which did nothing to resist
             # rotation. Simple P-controller on yaw error.
             yaw_rt = 0.0
+            current_yaw = None
+            yaw_error = None
             if config.YAW_LOCKED:
                 current_yaw = self.vehicle.get_yaw()
                 if current_yaw is not None:
@@ -223,7 +232,21 @@ class CorridorNavigator:
                     self._avoid_direction = None
                     self._clear_streak = 0
 
-            self.vehicle.send_velocity_body(vx=vx, vy=vy, vz=0.0, yaw_rate=yaw_rt)
+            if config.USE_POSITION_TARGET_NAV and pos is not None:
+                # Position-target mode: send the corridor END as a destination (re-aimed at the
+                # corridor centre from the side sensors) and let ArduPilot fly it -- BendyRuler can
+                # then steer around obstacles. Re-sent every POSITION_TARGET_PERIOD_S, not every tick.
+                if time.time() - self._last_target_t >= config.POSITION_TARGET_PERIOD_S:
+                    shift = max(-1.0, min(1.0, -(left - right) / 2.0))   # +ve = move right
+                    lat_center = self._lateral_offset_m + shift
+                    ahead = config.CORRIDOR_LENGTH_M + config.POSITION_TARGET_EXIT_MARGIN_M
+                    cy, sy = math.cos(target_yaw), math.sin(target_yaw)
+                    dest_x = start_x + ahead * cy - lat_center * sy
+                    dest_y = start_y + ahead * sy + lat_center * cy
+                    self.vehicle.send_position_target_local(dest_x, dest_y, pos[2], yaw=target_yaw)
+                    self._last_target_t = time.time()
+            else:
+                self.vehicle.send_velocity_body(vx=vx, vy=vy, vz=0.0, yaw_rate=yaw_rt)
 
             # Fallback only: if this tick's telemetry read failed (pos is None,
             # checked above), keep the loop moving using the old dead-reckoning
