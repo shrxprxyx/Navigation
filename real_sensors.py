@@ -1,11 +1,15 @@
 """real_sensors.py
 
 Drop-in replacement for SimulatedCorridorSensors / ReplaySensors on the real drone.
-Same interface: read(along_corridor_m, lateral_offset_m) -> {left_m, right_m, front_m, obstacle_ahead}
+Same interface: read(along_corridor_m, lateral_offset_m) ->
+    {left_m, right_m, front_m, obstacle_ahead, front_valid}
 
   left / right : 2x VL53L1X on the Pi (I2C, separate addresses via XSHUT)
   front        : lidar wired to the FC, read from its DISTANCE_SENSOR MAVLink messages
 All values are CENTER-referenced (sensor reading + calibration bias + mount offset), like sensor_sim.
+
+front_valid is False while the lidar has produced nothing usable; the navigator aborts if that
+lasts longer than config.FRONT_LIDAR_SILENT_ABORT_S.
 """
 import config
 from tof_interface import (RangeSensor, SensorConfig,
@@ -21,7 +25,8 @@ class RealCorridorSensors:
             left_raw, right_raw = make_adafruit_vl53l1x_pair(
                 config.TOF_LEFT_XSHUT_GPIO, config.TOF_RIGHT_XSHUT_GPIO,
                 config.TOF_LEFT_ADDR, config.TOF_RIGHT_ADDR,
-                mode=config.TOF_DISTANCE_MODE, timing_ms=config.TOF_TIMING_BUDGET_MS)
+                mode=config.TOF_DISTANCE_MODE, timing_ms=config.TOF_TIMING_BUDGET_MS,
+                i2c_bus=config.TOF_I2C_BUS)
         else:
             left_raw, right_raw = make_vl53l1x_pair(
                 config.TOF_LEFT_XSHUT_GPIO, config.TOF_RIGHT_XSHUT_GPIO,
@@ -72,4 +77,7 @@ class RealCorridorSensors:
             "right_m": round(right_m, 3),
             "front_m": round(front_m, 3),
             "obstacle_ahead": obstacle_ahead,
+            "front_valid": f.valid,
+            "left_valid": l.valid,
+            "right_valid": r.valid,
         }
