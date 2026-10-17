@@ -113,6 +113,21 @@ class Vehicle:
         )
         print("[mavlink] Disarm command sent.")
 
+
+    def land(self, timeout_s=90):
+        """Switch to LAND and wait until the FC reports disarmed (it auto-disarms on touchdown).
+        A plain disarm() is refused while airborne, so always use this to finish a flight."""
+        print("[mavlink] Landing (LAND mode)...")
+        self.set_mode("LAND")
+        t0 = time.time()
+        while time.time() - t0 < timeout_s:
+            msg = self.master.recv_match(type="HEARTBEAT", blocking=True, timeout=1)
+            if msg is not None and not (msg.base_mode & mavutil.mavlink.MAV_MODE_FLAG_SAFETY_ARMED):
+                print("[mavlink] Landed and disarmed.")
+                return True
+        print("[mavlink] WARNING: no disarm confirmation after landing timeout")
+        return False
+
     # ============= Takeoff =============
     def takeoff(self, altitude_m):
         print(f"[mavlink] Taking off to {altitude_m} m ...")
@@ -334,6 +349,14 @@ class FakeVehicle:
     def get_relative_altitude(self, apply_sensor_bias=False):
         """Return absolute value of Z (NED up is negative)."""
         return abs(self.z)
+
+    def land(self):
+        self.z = 0.0
+        return True
+
+    def send_position_target_local(self, x, y, z, yaw=None):
+        """Offline stub: ArduPilot path planning is not emulated."""
+        pass
 # import time
 # from pymavlink import mavutil
 # import config

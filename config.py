@@ -6,6 +6,8 @@ All tunable parameters for corridor navigation.
 NEW: Sensor calibration bias constants (from real hardware test, Sept 2026)
 """
 
+import os
+
 # ---- MAVLink connection ----
 MAVLINK_CONNECTION_STRING = "tcp:127.0.0.1:5762"
 
@@ -30,7 +32,7 @@ LEFT_SENSOR_NOISE_STD_MM = 1.97
 RIGHT_SENSOR_BIAS_MM = 17.3        # VL53L1X right (reads lower than left)
 RIGHT_SENSOR_NOISE_STD_MM = 2.34
 
-# ---- Front LiDAR (TF-Luna) ----
+# ---- Front LiDAR (TFmini) ----
 FRONT_LIDAR_MAX_RANGE_M = 8.0
 OBSTACLE_STOP_DISTANCE_M = 1.0      # stop/hold if obstacle closer than this
 OBSTACLE_SLOW_DISTANCE_M = 2.5      # start slowing down within this range
@@ -47,38 +49,53 @@ CUSTOM_SIDESTEP_STEERING_ENABLED = False
 CONTROL_LOOP_HZ = 10.0              # 10 Hz update rate
 FORWARD_SPEED_MAX_MPS = 0.5         # cruise speed inside corridor
 FORWARD_SPEED_MIN_MPS = 0.1         # crawl speed when near obstacle
-LATERAL_KP = 0.6                    # PID proportional gain
-LATERAL_KI = 0.02
-LATERAL_KD = 0.15
+LATERAL_KP = 0.8     # Up from 0.6
+LATERAL_KI = 0.03    # Up from 0.02
+LATERAL_KD = 0.2     # Up from 0.15
 LATERAL_MAX_MPS = 0.3               # clamp lateral correction speed
 YAW_LOCKED = True                   # keep yaw fixed
 YAW_LOCK_KP = 2.0                   # P-gain: yaw error (rad) -> yaw_rate
 YAW_LOCK_MAX_RATE_RAD_S = 0.5       # clamp on corrective yaw rate
 
 # ---- Safety ----
-MIN_WALL_CLEARANCE_M = 0.25         # abort if closer to either wall
+MIN_WALL_CLEARANCE_M = 0.15         # abort if closer to either wall
 CORRIDOR_TIMEOUT_S = 90             # abort if mission takes longer
 
 # ---- Simulated sensors (for offline testing without Gazebo) ----
 # Only used by sensor_sim.py in real_time=False mode
-SIM_OBSTACLES = [
-    # (distance_along_corridor_m, lateral_offset_from_center_m, radius_m)
-    (4.0, 0.5, 0.3),
-    (7.0, -0.6, 0.3)
-]
+SIM_OBSTACLES = []   # [] = no simulated front obstacles (with SENSOR_SOURCE = "obslog" + a lidar log, the front comes from the log)
 SIM_WALL_NOISE_STD_M = 0.03   # Use real sensor noise levels instead:
 # SIM_WALL_NOISE_STD_M = (FRONT_SENSOR_NOISE_STD_MM / 1000.0)  # ~0.002 m
 
-# ---- Sensor source & Pi hardware ----
-SENSOR_SOURCE = "replay"            # "sim" | "logged" | "replay" | "real"  ("replay" = SITL test, "real" = drone)
+# ---- Sensor source ----
+#   "sim"    : everything simulated (sensor_sim.py)
+#   "logged" : left/right from the L_/R_ calibration .docx logs, front simulated
+#   "replay" : simulated corridor + the real noise from those calibration logs
+#   "obslog" : left/right from SIDE_OBSTACLE_LOG_PATH, front from FRONT_LIDAR_LOG_PATH if that file exists   <- Mission Planner test
+#   "real"   : VL53L1X on the Pi + lidar on the FC                                                         <- the drone
+SENSOR_SOURCE = "obslog"
+SIDE_OBSTACLE_LOG_PATH = "side_obstacle_log.txt"   # 'Left Obstacle: .. cm | Right Obstacle: .. cm' lines
+SIDE_OBSTACLE_LOG_LOOP = True                      # loop the logs when they end (for continuous testing)
+# Lidar log: used only if the file exists, so a missing file can't crash the run after takeoff.
+FRONT_LIDAR_LOG_PATH = "front_lidar_log.txt" if os.path.exists("front_lidar_log.txt") else None
+FRONT_LIDAR_LOG_UNIT = "cm"                        # TFmini prints centimetres
+FRONT_LIDAR_LOG_LOOP = False                       # False: the lidar log plays once, then the front is clear
+
+# ---- Pi hardware (SENSOR_SOURCE = "real") ----
 TOF_I2C_BUS = 1
 TOF_LEFT_XSHUT_GPIO = 17            # BCM pin wired to left VL53L1X XSHUT  <-- set to your wiring
 TOF_RIGHT_XSHUT_GPIO = 27           # BCM pin wired to right VL53L1X XSHUT <-- set to your wiring
 TOF_LEFT_ADDR = 0x30
 TOF_RIGHT_ADDR = 0x31
+TOF_LIBRARY = "vl53l1x"             # "vl53l1x" (pip VL53L1X package) | "adafruit" (adafruit_vl53l1x)
+TOF_DISTANCE_MODE = 2               # vl53l1x pkg: 1 short / 2 medium / 3 long;  adafruit: 1 short / 2 long
+TOF_TIMING_BUDGET_MS = 50           # adafruit driver only
+TOF_NONE_MEANS_CLEAR = False        # False = a side sensor with no reading is a FAULT (reads 0.0 -> abort/hold)
+TOF_CLEAR_RANGE_M = 4.0             # only used if TOF_NONE_MEANS_CLEAR is True
 FRONT_LIDAR_ORIENTATION = 0         # MAV_SENSOR_ROTATION_NONE = forward (matches RNGFND1_ORIENT)
 if SENSOR_SOURCE == "real":
-    # The FC reads the real lidar itself; injecting fake DISTANCE_SENSOR would conflict with it.
+    # On the real drone the FC reads the lidar itself; injecting fake DISTANCE_SENSOR would conflict with it.
+    # (Every other source -- sim, replay, obslog -- needs the injection so BendyRuler gets obstacle data.)
     FEED_DISTANCE_SENSOR_TO_FC = False
 
 # ---- Position-target navigation (lets ArduPilot's BendyRuler steer around obstacles) ----
@@ -86,87 +103,9 @@ USE_POSITION_TARGET_NAV = True    # True = send corridor-end destination instead
 POSITION_TARGET_PERIOD_S = 0.5      # how often the destination is re-sent
 POSITION_TARGET_EXIT_MARGIN_M = 1.0 # aim this far past the corridor end so the drone doesn't stop early
 # When True also: CUSTOM_SIDESTEP_STEERING_ENABLED = False, FEED_DISTANCE_SENSOR_TO_FC = True
-# FC params: OA_TYPE=1, OA_BR_TYPE=1, OA_BR_LOOKAHEAD=4, OA_MARGIN_MAX=0.6, WPNAV_SPEED=50,
-#            AVOID_ENABLE=0, PRX1_TYPE=2
+# FC params: OA_TYPE=1, OA_BR_TYPE=1, OA_BR_LOOKAHEAD=4, OA_MARGIN_MAX=0.6, OA_DB_SIZE=100, OA_DB_EXPIRE=3,
+#            GUID_OPTIONS=64, WP_SPD=0.5 (m/s), AVOID_ENABLE=0,
+#            PRX1_TYPE=2 for Mission Planner SITL / 4 (RangeFinder) for the real lidar on the FC
 
 # ---- Altitude control (for descent phase before corridor entry) ----
 DESCENT_RATE_MPS = 0.5              # how fast to descend from scan altitude
-# """
-# config.py
-# ---------
-# All tunable parameters for corridor navigation live here.
-# Edit values in this file instead of hunting through the other scripts.
-# """
-
-# # ---------------- MAVLink connection ----------------
-# # Mission Planner's SITL instance already listens/broadcasts on TCP 5760
-# # (that's the port Mission Planner itself connects to -- see the top-right
-# # of its window). ArduPilot SITL automatically opens TWO EXTRA TCP ports
-# # for additional clients: 5762 and 5763. We connect our companion-computer
-# # script to one of those, so it can run alongside Mission Planner without
-# # stealing its connection or needing any extra --out param.
-# # If tcp:5762 is already taken (e.g. by another script), try tcp:5763.
-# MAVLINK_CONNECTION_STRING = "tcp:127.0.0.1:5762"
-
-# # ---------------- Corridor geometry ----------------
-# # From your mission doc: corridor is 3.5 m wide, 10 m long, flown at ~3 m
-# # altitude (10 ft) after descending from the 5 m QR-scan altitude.
-# CORRIDOR_WIDTH_M = 3.5
-# CORRIDOR_LENGTH_M = 10.0
-# CORRIDOR_ALTITUDE_M = 3.0
-# SCAN_ALTITUDE_M = 5.0
-# DELIVERY_ZONE_ALTITUDE_M = 10.0
-
-# # ---------------- Sensor mounting ----------------
-# # Distance from drone center to each side sensor's mounting point (m).
-# # Used to convert raw sensor range -> distance from drone CENTER to wall.
-# SENSOR_OFFSET_LEFT_M = 0.15
-# SENSOR_OFFSET_RIGHT_M = 0.15
-
-# # Front lidar (TF-Luna) max reliable range (m) and obstacle trigger distance
-# FRONT_LIDAR_MAX_RANGE_M = 8.0
-# OBSTACLE_STOP_DISTANCE_M = 1.0      # stop/hold if obstacle closer than this
-# OBSTACLE_SLOW_DISTANCE_M = 2.5      # start slowing down within this range
-# CLEAR_STREAK_TO_RELEASE = 8         # consecutive clear ticks required before releasing avoidance lock (debounce)
-
-# # ---------------- Avoidance architecture ----------------
-# # PRIMARY: feed live DISTANCE_SENSOR data to the flight controller every
-# # tick, so ArduPilot's BendyRuler (if enabled via OA_TYPE in Mission
-# # Planner's param list) does the actual lateral steering around obstacles.
-# FEED_DISTANCE_SENSOR_TO_FC = True
-
-# # BACKUP: the companion-computer-side sidestep steering in
-# # corridor_navigator.py (the avoid_direction lock/blend logic). Left OFF
-# # by default now that BendyRuler is primary -- running both at once means
-# # two independent systems can each pick a different dodge direction and
-# # fight each other. Speed ramp-down and the min-wall-clearance hard abort
-# # stay ACTIVE regardless of this flag -- those don't steer, so they can't
-# # conflict with BendyRuler, and they're exactly the kind of safety net
-# # you want even when the FC is doing the steering.
-# CUSTOM_SIDESTEP_STEERING_ENABLED = False
-
-# # ---------------- Control loop ----------------
-# CONTROL_LOOP_HZ = 10.0              # how often we send velocity setpoints
-# FORWARD_SPEED_MAX_MPS = 0.5         # cruise speed inside corridor (slow!)
-# FORWARD_SPEED_MIN_MPS = 0.1         # crawl speed when near obstacle
-# LATERAL_KP = 0.6                    # proportional gain, centering error -> vy
-# LATERAL_KI = 0.02
-# LATERAL_KD = 0.15
-# LATERAL_MAX_MPS = 0.3               # clamp lateral correction speed
-# YAW_LOCKED = True                   # keep yaw fixed, only move fwd/lateral
-# YAW_LOCK_KP = 2.0                   # P-gain: yaw error (rad) -> yaw_rate command (rad/s)
-# YAW_LOCK_MAX_RATE_RAD_S = 0.5       # clamp on the corrective yaw rate
-
-# # ---------------- Safety ----------------
-# MIN_WALL_CLEARANCE_M = 0.25         # abort if drone gets closer than this to either wall
-# CORRIDOR_TIMEOUT_S = 90             # abort corridor nav if it takes longer than this
-
-# # ---------------- Simulated sensors (for Option A: logic-only sim) ----------------
-# # Only used by sensor_sim.py when running WITHOUT Gazebo, to fake a
-# # corridor + static obstacles so you can test your control logic.
-# SIM_OBSTACLES = [
-#     # (distance_along_corridor_m, lateral_offset_from_center_m, radius_m)
-#     (4.0, 0.5, 0.3),
-#     (7.0, -0.6, 0.3),
-# ]
-# SIM_WALL_NOISE_STD_M = 0.03   # sensor noise to make sim realistic

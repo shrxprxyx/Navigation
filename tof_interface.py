@@ -102,6 +102,54 @@ def make_vl53l1x_pair(xshut_left, xshut_right, addr_left=0x30, addr_right=0x31,
     return readers[0], readers[1]
 
 
+def _adafruit_reader(sensor, stale_s=0.5):
+    """Wrap one adafruit_vl53l1x sensor as a reader returning mm or None.
+    The sensor only produces a new value every timing-budget (e.g. 50 ms), so between
+    measurements we return the newest one instead of None. None comes back only when the
+    sensor itself reported no target, or when it has produced nothing for `stale_s`."""
+    state = {"mm": None, "t": time.monotonic()}
+
+    def read():
+        try:
+            if sensor.data_ready:
+                d = sensor.distance            # cm, or None when there is no valid target
+                sensor.clear_interrupt()
+                state["mm"] = None if d is None else d * 10.0
+                state["t"] = time.monotonic()
+        except Exception:
+            pass
+        if time.monotonic() - state["t"] > stale_s:
+            return None                        # sensor stopped answering
+        return state["mm"]
+    return read
+
+
+def make_adafruit_vl53l1x_pair(xshut_left, xshut_right, addr_left=0x30, addr_right=0x31,
+                               mode=2, timing_ms=50):
+    """Two VL53L1X with the Adafruit CircuitPython driver (distance in cm, None = no target).
+    Both boot at 0x29, so they are started one at a time via their XSHUT pins and each is given
+    its own address. mode: 1 = short, 2 = long. Returns (left_reader, right_reader) in mm."""
+    import board
+    import adafruit_vl53l1x
+    from gpiozero import DigitalOutputDevice
+    i2c = board.I2C()
+    pins = [DigitalOutputDevice(xshut_left, initial_value=False),
+            DigitalOutputDevice(xshut_right, initial_value=False)]
+    _XSHUT_KEEPALIVE.extend(pins)
+    time.sleep(0.05)
+    readers = []
+    for pin, addr in zip(pins, (addr_left, addr_right)):
+        pin.on()
+        time.sleep(0.05)
+        sensor = adafruit_vl53l1x.VL53L1X(i2c)        # appears at the default 0x29
+        sensor.set_address(addr)
+        sensor.distance_mode = mode
+        sensor.timing_budget = timing_ms
+        sensor.start_ranging()
+        readers.append(_adafruit_reader(sensor))
+    return readers[0], readers[1]
+
+
 class FakeRange:
     """Simulated raw reader (mm) for offline tests. Defaults mimic the bench noise."""
     def __init__(self, true_mm, bias_mm=-7, sigma_mm=2.0, dropout_p=0.0, spike_p=0.0):
