@@ -7,6 +7,9 @@ import sys
 import math
 import time
 import config
+# This fake vehicle can't emulate ArduPilot's BendyRuler, so test the Python-side logic only:
+config.USE_POSITION_TARGET_NAV = False
+config.CUSTOM_SIDESTEP_STEERING_ENABLED = True
 from sensor_sim import SimulatedCorridorSensors
 from corridor_navigator import CorridorNavigator, CorridorResult
 from flight_logger import FlightLogger
@@ -40,12 +43,9 @@ class FakeVehicle:
 
     def get_local_position(self):
         """Integrate velocities into position (body frame -> NED)."""
-        now = time.time()
-        dt = now - self.last_update_time
-        self.last_update_time = now
-        
-        if dt > 0.5:
-            dt = 0.05
+        # fixed step = the navigator's virtual clock when run(real_time=False); using wall-clock
+        # time here made the vehicle barely move, so the old test always timed out at 0.00 m
+        dt = 1.0 / config.CONTROL_LOOP_HZ
         
         self.yaw += self.last_yaw_rate * dt
         
