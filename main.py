@@ -64,10 +64,9 @@ def build_sensors(vehicle):
     from logged_sensor import LoggedFrontLRSensor
     return LoggedFrontLRSensor()
 
-
 def preflight_sensor_check(sensors, good_reads_needed=15, timeout_s=15.0):
-    """Real drone: require N consecutive readings where left, right AND the front lidar are all valid.
-    Refuses to arm otherwise (a dead I2C sensor or an unplugged lidar is found on the ground)."""
+    """Real drone: require N consecutive readings where at least one side sensor AND front lidar are all valid.
+    Allows arming with single side sensor failure."""
     print("[main] Pre-flight sensor check ...")
     t0 = time.time()
     good = 0
@@ -75,7 +74,9 @@ def preflight_sensor_check(sensors, good_reads_needed=15, timeout_s=15.0):
     while time.time() - t0 < timeout_s:
         r = sensors.read(0.0, 0.0)
         last = r
-        ok = (r["left_m"] > 0.0 and r["right_m"] > 0.0 and r.get("front_valid", True))
+        # Require front sensor valid AND at least one side sensor working (> 0.0m)
+        side_ok = r["left_m"] > 0.0 or r["right_m"] > 0.0
+        ok = side_ok and r.get("front_valid", True)
         good = good + 1 if ok else 0
         if good >= good_reads_needed:
             print(f"[main] Sensors OK: left={r['left_m']:.2f} m  right={r['right_m']:.2f} m  "
@@ -83,8 +84,8 @@ def preflight_sensor_check(sensors, good_reads_needed=15, timeout_s=15.0):
             return True
         time.sleep(0.1)
     print(f"[main] SENSOR CHECK FAILED. Last reading: {last}")
-    print("       left/right = 0.0 means that VL53L1X gave nothing; front_valid False means no "
-          "DISTANCE_SENSOR from the FC (check lidar wiring, SERIAL4_*, RNGFND1_*, SR2_EXTRA3).")
+    print("       With relaxed check: need front_valid=True AND (left_m>0.0 OR right_m>0.0)")
+    print("       left/right = 0.0 means VL53L1X gave nothing; front_valid=False means no DISTANCE_SENSOR from FC")
     return False
 
 

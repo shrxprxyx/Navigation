@@ -6,11 +6,14 @@ Same interface: read(along_corridor_m, lateral_offset_m) ->
 
   left / right : 2x VL53L1X on the Pi (I2C, separate addresses via XSHUT)
   front        : lidar wired to the FC, read from its DISTANCE_SENSOR MAVLink messages
+  If config.STREAM_SIDE_TOF_TO_FC is on, every read() also streams the filtered left/right values
+  to the FC as DISTANCE_SENSOR (orientation YAW_270 / YAW_90), so they show up in Mission Planner.
 All values are CENTER-referenced (sensor reading + calibration bias + mount offset), like sensor_sim.
 
 front_valid is False while the lidar has produced nothing usable; the navigator aborts if that
 lasts longer than config.FRONT_LIDAR_SILENT_ABORT_S.
 """
+import time
 import config
 from tof_interface import (RangeSensor, SensorConfig,
                            make_vl53l1x_pair, make_adafruit_vl53l1x_pair)
@@ -41,7 +44,31 @@ class RealCorridorSensors:
         self.front = RangeSensor(self._front_raw, SensorConfig(
             offset_mm=config.FRONT_SENSOR_BIAS_MM, min_mm=100,
             max_mm=1_000_000, max_jump_mm=1_000_000))
-        vehicle.request_message_interval(DISTANCE_SENSOR_MSG_ID, 10)
+        self._last_stream = 0.0
+        # The FC reports each rangefinder instance (front + the two MAVLink side ones) in DISTANCE_SENSOR;
+        # ask for a higher rate when it carries three, so the front lidar keeps ~10 Hz of its own.
+        stream = getattr(config, "STREAM_SIDE_TOF_TO_FC", False)
+        vehicle.request_message_interval(DISTANCE_SENSOR_MSG_ID, 30 if stream else 10)
+
+    def _stream_sides(self, l, r):
+        """Send the filtered, bias-corrected side readings (sensor-referenced, cm) to the FC."""
+        if not getattr(config, "STREAM_SIDE_TOF_TO_FC", False):
+            return
+        now = time.monotonic()
+        if now - self._last_stream < 1.0 / config.STREAM_SIDE_TOF_HZ:
+            return
+        self._last_stream = now
+        for rd, orient, sid in ((l, config.TOF_LEFT_ORIENTATION, config.TOF_LEFT_SENSOR_ID),
+                                (r, config.TOF_RIGHT_ORIENTATION, config.TOF_RIGHT_SENSOR_ID)):
+            if rd.valid:                      # no reading -> send nothing; the FC times the sensor out
+                self.vehicle.send_distance_sensor(
+                    rd.range_mm / 10.0, orient, sid,
+                    config.TOF_STREAM_MIN_CM, config.TOF_STREAM_MAX_CM)
+
+    def service(self):
+        """Read + stream once. Called while main.py waits (ENTER prompt, arming, takeoff, descent) so
+        the side data keeps flowing to the FC even when the navigator isn't running."""
+        self.read(0.0, 0.0)
 
     def _front_raw(self):
         return self.vehicle.get_distance_sensor_mm(config.FRONT_LIDAR_ORIENTATION)
@@ -56,6 +83,7 @@ class RealCorridorSensors:
 
     def read(self, along_corridor_m, lateral_offset_m):
         l, r, f = self.left.read(), self.right.read(), self.front.read()
+        self._stream_sides(l, r)
         left_m = self._side_m(l, config.SENSOR_OFFSET_LEFT_M)
         right_m = self._side_m(r, config.SENSOR_OFFSET_RIGHT_M)
 

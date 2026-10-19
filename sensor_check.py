@@ -3,7 +3,9 @@ sensor_check.py
 ---------------
 Bench tool: prints the sensor readings the navigator would see. Run it with PROPS OFF.
 
-    python sensor_check.py              # full check: VL53L1X pair on the Pi + front lidar via the FC
+    python sensor_check.py              # full check: VL53L1X pair on the Pi + front lidar via the FC.
+                                        # Also streams left/right to the FC as DISTANCE_SENSOR (config.STREAM_SIDE_TOF_TO_FC),
+                                        # exactly like the standalone ToF->Mission Planner script: check them in the MP proximity view.
     python sensor_check.py --tof-only   # only the two VL53L1X (no flight controller needed)
 
 Ctrl+C to stop.
@@ -52,4 +54,4 @@ if __name__ == "__main__":
     try:
         tof_only() if "--tof-only" in sys.argv else full()
     except KeyboardInterrupt:
-        print("\nstopped")  
+        print("\nstopped")

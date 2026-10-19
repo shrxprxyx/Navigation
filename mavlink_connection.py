@@ -30,9 +30,27 @@ class Vehicle:
             'right': getattr(config, 'RIGHT_SENSOR_BIAS_MM', 7.2),
         }
 
+        self._t0 = time.time()          # for DISTANCE_SENSOR time_boot_ms
+        self._idle_hooks = []           # callables run while we wait (arm / takeoff / land / mode change)
+
         # Newest message of each type, and when it arrived
         self._telemetry_cache = {}
         self._cache_timestamps = {}
+
+    # ============= Idle hooks =============
+    def add_idle_hook(self, fn):
+        """Register fn() to be called ~10-20 times a second while this class waits for the FC
+        (arming, takeoff, landing, mode change). Used to keep streaming the side ToF readings so a
+        MAVLink proximity sensor on the FC doesn't go stale (PreArm: PRXn: No Data)."""
+        self._idle_hooks.append(fn)
+
+    def _idle(self):
+        for fn in self._idle_hooks:
+            try:
+                fn()
+            except Exception as e:
+                print(f"[mavlink] idle hook failed ({e}); removing it")
+                self._idle_hooks.remove(fn)
 
     # ============= Connection =============
     def connect(self, timeout_s=30):
@@ -46,6 +64,8 @@ class Vehicle:
         if hb is None:
             raise RuntimeError(f"No MAVLink heartbeat on {self.connection_string} within {timeout_s}s "
                                f"(check wiring, SERIAL2_PROTOCOL/BAUD and the port name)")
+        self._telemetry_cache["HEARTBEAT"] = hb
+        self._cache_timestamps["HEARTBEAT"] = time.time()
         print(f"[mavlink] Heartbeat received (sysid={self.master.target_system}, "
               f"compid={self.master.target_component})")
         self._request_data_streams()
@@ -75,18 +95,18 @@ class Vehicle:
     def _wait_for_mode(self, mode_name, timeout_s=10):
         t0 = time.time()
         while time.time() - t0 < timeout_s:
-            msg = self.master.recv_match(type="HEARTBEAT", blocking=True, timeout=2)
-            if msg is None:
-                continue
-            current_mode = mavutil.mode_string_v10(msg)
-            if current_mode == mode_name:
+            self._idle()
+            self._pump()
+            if self.get_mode() == mode_name:
                 print(f"[mavlink] Mode set to {mode_name}")
                 return True
+            time.sleep(0.05)
         print(f"[mavlink] WARNING: mode {mode_name} not confirmed within timeout")
         return False
 
     def arm(self, wait_armed=True, timeout_s=45, retry_interval_s=3):
-        """Sends arm command and retries until armed or timeout."""
+        """Sends arm command and retries until armed or timeout. FC messages (PreArm reasons) are
+        printed as they arrive."""
         print("  [mavlink] Arming (will retry until armed or timeout)...")
         t0 = time.time()
         last_attempt = 0
@@ -103,14 +123,12 @@ class Vehicle:
             if not wait_armed:
                 return True
 
-            msg = self.master.recv_match(type="HEARTBEAT", blocking=True, timeout=1)
-            if msg and (msg.base_mode & mavutil.mavlink.MAV_MODE_FLAG_SAFETY_ARMED):
+            self._idle()
+            self._pump()
+            if self.is_armed():
                 print("  [mavlink] Armed.")
                 return True
-
-            status = self.master.recv_match(type="STATUSTEXT", blocking=False)
-            if status and status.text:
-                print(f"  [mavlink] STATUSTEXT: {status.text}")
+            time.sleep(0.05)
 
         print(f"[mavlink] WARNING: arm not confirmed within {timeout_s}s timeout")
         return False
@@ -130,10 +148,12 @@ class Vehicle:
         self.set_mode("LAND")
         t0 = time.time()
         while time.time() - t0 < timeout_s:
-            msg = self.master.recv_match(type="HEARTBEAT", blocking=True, timeout=1)
-            if msg is not None and not (msg.base_mode & mavutil.mavlink.MAV_MODE_FLAG_SAFETY_ARMED):
+            self._idle()
+            self._pump()
+            if self.is_armed() is False:
                 print("[mavlink] Landed and disarmed.")
                 return True
+            time.sleep(0.05)
         print("[mavlink] WARNING: no disarm confirmation after landing timeout")
         return False
 
@@ -154,7 +174,8 @@ class Vehicle:
             if alt is not None and abs(alt - target_altitude_m) <= tolerance_m:
                 print(f"[mavlink] Reached altitude {alt:.2f} m")
                 return True
-            time.sleep(0.2)
+            self._idle()
+            time.sleep(0.1)
         print("[mavlink] WARNING: target altitude not confirmed within timeout")
         return False
 
@@ -171,6 +192,8 @@ class Vehicle:
             t = msg.get_type()
             if t == "BAD_DATA":
                 continue
+            if t == "STATUSTEXT":
+                print(f"[FC] {msg.text}")
             if t == "HEARTBEAT":
                 if (msg.get_srcSystem() != self.master.target_system
                         or msg.type == mavutil.mavlink.MAV_TYPE_GCS):
@@ -214,6 +237,13 @@ class Vehicle:
         if msg is None:
             return None
         return mavutil.mode_string_v10(msg)
+
+    def is_armed(self):
+        """True/False from the newest FC heartbeat, or None if none has been seen."""
+        msg = self._get_cached_message("HEARTBEAT")
+        if msg is None:
+            return None
+        return bool(msg.base_mode & mavutil.mavlink.MAV_MODE_FLAG_SAFETY_ARMED)
 
     def heartbeat_age_s(self):
         """Seconds since the last FC heartbeat, or None if none has been seen."""
@@ -278,6 +308,16 @@ class Vehicle:
             orientation,
             0,                      # covariance
         )
+
+    def send_distance_sensor(self, distance_cm, orientation, sensor_id, min_cm=10, max_cm=400):
+        """Send one REAL measurement to the FC as DISTANCE_SENSOR (distance clamped to min..max cm).
+        Used to stream the Pi's left/right VL53L1X to ArduPilot / Mission Planner."""
+        cur = int(min(max(distance_cm, min_cm), max_cm))
+        self.master.mav.distance_sensor_send(
+            int((time.time() - self._t0) * 1000) & 0xFFFFFFFF,   # time_boot_ms
+            int(min_cm), int(max_cm), cur,
+            mavutil.mavlink.MAV_DISTANCE_SENSOR_LASER,
+            sensor_id, orientation, 0)                            # covariance unknown
 
     # ============= Real DISTANCE_SENSOR (lidar wired to the FC) =============
     def request_message_interval(self, msg_id, hz):
@@ -363,11 +403,20 @@ class FakeVehicle:
     def heartbeat_age_s(self):
         return 0.0
 
+    def is_armed(self):
+        return True
+
+    def add_idle_hook(self, fn):
+        pass
+
     def send_fake_distance_sensor(self, distance_cm, orientation, sensor_id):
         """No-op in offline mode."""
         pass
 
     def request_message_interval(self, msg_id, hz):
+        pass
+
+    def send_distance_sensor(self, distance_cm, orientation, sensor_id, min_cm=10, max_cm=400):
         pass
 
     def get_distance_sensor_mm(self, orientation=0, max_age_s=0.5):

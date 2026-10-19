@@ -16,6 +16,8 @@ import os
 # ---- MAVLink connection ----
 # Real drone, Pi 5 GPIO UART (TELEM2 on the FC):  "/dev/ttyAMA0"   (or "/dev/serial0")
 # Real drone, USB cable FC -> Pi:                 "/dev/ttyACM0"
+# Real drone via MAVProxy on the Pi (so Mission Planner can share the link):  "udp:127.0.0.1:14550"
+#   (only ONE program may own the serial port -- run main.py OR a separate script on that UDP port, not both)
 # SITL / Mission Planner:                         "tcp:127.0.0.1:5762"                    <-- SITL
 MAVLINK_CONNECTION_STRING = "/dev/ttyAMA0"
 MAVLINK_BAUD = 921600               # must match SERIAL2_BAUD=921 on the FC (ignored for tcp / USB)
@@ -100,14 +102,26 @@ FRONT_LIDAR_LOG_LOOP = False                       # False: the lidar log plays 
 TOF_I2C_BUS = 1
 TOF_LEFT_XSHUT_GPIO = 20            # BCM pin wired to left VL53L1X XSHUT
 TOF_RIGHT_XSHUT_GPIO = 21           # BCM pin wired to right VL53L1X XSHUT
-TOF_LEFT_ADDR = 0x30                # both sensors boot at 0x29; these are assigned at start-up
-TOF_RIGHT_ADDR = 0x31
+TOF_LEFT_ADDR = 0x2A                # left is moved to 0x2A at start-up; right stays at the default 0x29
+TOF_RIGHT_ADDR = 0x29               # (start-up scans the bus, so addresses left over from a previous run are fine)
 TOF_LIBRARY = "adafruit"            # "adafruit" (adafruit_vl53l1x) | "vl53l1x" (pip VL53L1X package)
 TOF_DISTANCE_MODE = 2               # adafruit: 1 short / 2 long;  vl53l1x pkg: 1 short / 2 medium / 3 long
 TOF_TIMING_BUDGET_MS = 50           # adafruit driver only
 TOF_NONE_MEANS_CLEAR = False        # False = a side sensor with no reading is a FAULT (reads 0.0 -> abort/hold)
 TOF_CLEAR_RANGE_M = 4.0             # only used if TOF_NONE_MEANS_CLEAR is True
 FRONT_LIDAR_ORIENTATION = 0         # MAV_SENSOR_ROTATION_NONE = forward (matches RNGFND1_ORIENT)
+
+# ---- Stream the Pi's left/right ToF to the FC as DISTANCE_SENSOR (shows in Mission Planner) ----
+# Same packets your standalone script sent. On the FC they arrive as MAVLink rangefinders
+# (RNGFND2 = left, RNGFND3 = right -- see corridor_params_real.txt) and join the proximity picture.
+STREAM_SIDE_TOF_TO_FC = True
+STREAM_SIDE_TOF_HZ = 12
+TOF_LEFT_ORIENTATION = 6            # MAV_SENSOR_ROTATION_YAW_270 (left)
+TOF_RIGHT_ORIENTATION = 2           # MAV_SENSOR_ROTATION_YAW_90  (right)
+TOF_LEFT_SENSOR_ID = 0
+TOF_RIGHT_SENSOR_ID = 1
+TOF_STREAM_MIN_CM = 10              # clamp range sent to the FC (matches RNGFND2/3_MIN_CM / MAX_CM)
+TOF_STREAM_MAX_CM = 400
 
 # ---- Real-drone start-up safety ----
 PREFLIGHT_SENSOR_CHECK = (SENSOR_SOURCE == "real")   # all three sensors must read OK before arming
